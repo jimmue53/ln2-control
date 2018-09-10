@@ -1,0 +1,455 @@
+PROGRAM Main
+// Initialize  -  at power up or on reset
+IF  __SYSVA_FIRST_SCAN OR F2  THEN
+  INIT := TRUE;
+  ELSE
+  INIT := FALSE;
+END_IF;
+
+// do_serial op symbolic constants are defined in the DataTypes/Defined Words 
+// SerRead=1, SerWrite=2, SerQuery=3, PollEnable=4, PollDisable=5
+//
+
+
+
+// ***************************************************************************
+//  Timer function blocks.  
+// ***************************************************************************
+
+IF INIT THEN  // init delay block, temperature dwell. Used to generate time between interpolated ramp points.
+  TP_MainStrobe := FALSE;
+  TP_MainDelay := T#250ms;
+END_IF;
+// TP_xx.Q goes high when strobe goes high and goes low when timer expires.
+TP_Main(TP_MainStrobe, TP_MainDelay);  // used to generate time between interpolated ramp points
+
+IF INIT THEN  // init delay block, temperature dwell
+  TP_PollStrobe := FALSE;
+  TP_PollDelay := T#2s;
+END_IF;
+// TP_xx.Q goes high when strobe goes high and goes low when timer expires.
+TP_Poll(TP_PollStrobe, TP_PollDelay);  // used by main
+
+
+// ***************************************************************************
+//  Chiller serial port function block
+// ***************************************************************************
+IF INIT THEN  // INIT serial blocks
+  ChillChan :=5;
+  ChillStrobe := FALSE;
+  ChillAppendCR := TRUE;
+  
+  
+END_IF;
+do_serial_chiller(ChillStrobe, Chillop, ChillChan, ChillWrtString,ChillAppendCR );
+    //if new value is availabe, then update CURRENT_TEMP
+	IF do_serial_chiller.PollOut THEN
+	  CURRENT_TEMP := ANY_TO_REAL(do_serial_chiller.RdString);
+	END_IF;
+
+
+// ***************************************************************************
+// ********Start of Main State machine********
+// ***************************************************************************
+IF INIT THEN
+  _IO_EM_DO_02 := FALSE;
+  F1DISP := 0; //Set F1 display to 'GO'
+  LN2_BOOST_STATE := 0;
+  MainState := 5;
+END_IF;
+
+CASE MainState OF
+
+   // turn on chiller power
+   5: 
+	  ChillWrtString := 'out_mode_05 1';
+	  ChillOp:= SerWrite;
+	  ChillStrobe := TRUE; 
+	  MainState := 8;
+   8:  
+    IF do_serial_chiller.Q THEN
+	    ChillStrobe := FALSE;
+	    MainState := 20;
+    END_IF;
+
+  
+  // Start auto polling in do_serial_chiller to keep actual temp display updating  
+  20:  
+    CYCLE_STEP := 'IDLE';
+	Chillop := PollEnable;
+	ChillWrtString := 'in_pv_00';  // poll will use this command to get actual bath temperture
+	ChillStrobe := TRUE;
+	MainState := 25;
+  25:
+    IF do_serial_chiller.Q THEN  //wait for Q to com back from do_serial_chiller
+	  ChillStrobe := FALSE;
+	  MainState := 30;
+	END_IF;
+	
+  // IDLE State, Waiting for operator to press F1
+  30:	
+    STATUS := 'Press F1 to begin cycle.';
+    IF F1 THEN
+	  F1DISP := 1; // Set F1 menu item to 'Pause'
+
+  //Disable poll
+	  ChillOp:= PollDisable;
+	  ChillStrobe := TRUE;
+	  MainState := 32;
+	END_IF;
+  32:
+    IF do_serial_chiller.Q THEN
+      ChillStrobe := FALSE;
+      MainState := 33;
+	END_IF;	  
+
+  //Write seed temp to chiller
+  33:
+	  command := 'out_sp_00 ';
+	  valuestr := String_1decimal( CoolCurve[1]);
+	  SET_TEMP := CoolCurve[1];
+	  ChillWrtString := REPLACE(command, valuestr, 11,16);
+	  ChillOp:= SerWrite;
+	  ChillStrobe := TRUE; 
+	  MainState := 35;
+  35:  
+    IF do_serial_chiller.Q THEN
+	    ChillStrobe := FALSE;
+	    MainState := 40;
+    END_IF;
+
+  40:  
+    CYCLE_STEP := 'RAMPING';
+	STATUS := '';
+	MainState := 45;
+
+  //Ramping to seed temperature  - continuously reading Temperature and Heater Power - apply boost as needed
+  //until the seed temperature is reached
+
+  //read bath temperature  
+  45:	//loop returns to here
+    Chillop := SerQuery;
+	ChillWrtString := 'in_pv_00';  //Actual bath temperature query
+	ChillStrobe := TRUE;
+	MainState := 48;
+  48:
+    IF do_serial_chiller.Q THEN
+	  CURRENT_TEMP := ANY_TO_REAL(do_serial_chiller.RdString);
+      ChillStrobe := FALSE;
+	  MainState := 50;
+	END_IF;
+ 
+  //read heating power  
+  50:
+    ChillWrtString := 'in_pv_01'; //heating power query
+	ChillStrobe := TRUE;
+	MainState := 52;
+  52:
+    IF do_serial_chiller.Q THEN
+	  HeatingPower := ANY_TO_REAL(do_serial_chiller.RdString);
+	  ChillStrobe := FALSE;
+
+  //if HeatingPower is at full cool turn on LN2 boost to assist	  
+	  IF HeatingPower > -99.0 THEN
+	    _IO_EM_DO_02 := FALSE;  // turn off LN2 boost solenoid
+	  ELSE
+	    _IO_EM_DO_02 := TRUE;  //turn on LN2 boost solenoid
+	  END_IF;
+
+  //check if seed temperature (CoolCurve[1]) has been reached.	  
+	  IF ABS(CURRENT_TEMP - CoolCurve[1]) <= 0.2 THEN  //check if reached seeding temp
+        _IO_EM_DO_02  := FALSE;  //turn off LN2 boost solenoid
+		F1DISP := 2;
+	    MainState := 60;  //kick out of seed temp loop
+		_IO_EM_DO_03  := TRUE;  //turn on buzzer
+		ELSE
+		//Set poll timer
+		TP_PollStrobe := TRUE;
+		MainState := 54;  // didn't get to seed temp yet
+	  END_IF;
+    END_IF;
+  
+   //wait for poll timer to expire.
+  54:  
+    IF NOT TP_Poll.Q THEN 
+	  TP_PollStrobe := FALSE;
+	  MainState := 45;
+	END_IF;
+
+
+
+// Stop for Seeding   
+  60:  
+    // HMI to beep, request seeding, and show pause state
+    // Wait for user to complete seeding and then hit continue on HMI
+   CYCLE_STEP := 'SEEDING';
+	
+	STATUS := 'Seed the Crystallizer, then hit F1(Continue Key), to continue.';
+    IF F3 THEN
+	  _IO_EM_DO_03  := FALSE;  //turn off buzzer
+	END_IF;
+	
+	IF F1 THEN  //Was continue button pressed?
+      F1DISP := 1;  //Set label on F1 to 'PAUSE'
+	  STATUS := '';  //Clear status display
+	  MainState := 80;
+	  CoolState := 20;  //Initialize CoolState sub state machine
+    END_IF;
+
+  //execute cooling curve
+  80:  
+	
+	CYCLE_STEP := 'COOLING';
+
+	// ********Start of Cooling  Curve State Machine********
+    // Ramp temp down according to loaded cooling curve 
+	
+	CASE CoolState OF
+      20:  // Initialize cooling curve index and dwell time  
+		COOL_DOWN_DTIME := 15.0;  // dwell time in seconds 
+	    TP_MainDelay := ANY_TO_TIME( ANY_TO_INT( 1000.0*COOL_DOWN_DTIME )   );
+	    ii := 1; // index into cooling curve.  First index to use is 2.  
+	    CoolState := 40;
+	  
+	  40:  //  Initialize interpolated points loop
+	    ii := ii + 1;  //increment CoolCurve array index
+	    Npoints := ANY_TO_DINT(CoolCurveTimes[ii]/COOL_DOWN_DTIME);
+	    delta_temp := ( CoolCurve[ii] - CoolCurve[ii-1] ) / ANY_TO_REAL(Npoints); //delta temp between interp pts
+	    jj := 0; // index for interpolated points
+	    NEXT_TEMP := CoolCurve[ii-1];
+	    CoolState := 60;
+
+	  // loop over interpolated points
+      60:  
+	    jj := jj + 1;  //increment interpolated points index
+	    NEXT_TEMP := NEXT_TEMP + delta_temp;
+	    SET_TEMP := NEXT_TEMP;
+	    
+	  //write new SET_TEMP to chiller
+		ChillWrtString := 'out_sp_00 ';
+	    valuestr := String_1decimal( NEXT_TEMP);
+	    ChillWrtString := REPLACE(ChillWrtString, valuestr, 11,16); 
+	    ChillOp := SerWrite;  
+		ChillStrobe := TRUE;  // write it
+		CoolState := 70;
+
+	  70:	
+		IF do_serial_chiller.Q THEN  // wait for write ack
+	      ChillStrobe := FALSE;
+		  TP_MainStrobe := TRUE;  //trigger dwell timer
+		  CoolState := 71;
+	    END_IF;
+
+    //Query chiller for the actual temperature
+	  71:	
+        Chillop := SerQuery;
+	    ChillWrtString := 'in_pv_00';  //command
+	    ChillStrobe := TRUE;  //start query
+	    CoolState := 72;
+      72:
+        IF do_serial_chiller.Q THEN  //wait for acknowledge from do_serial_chiller
+	      CURRENT_TEMP := ANY_TO_REAL(do_serial_chiller.RdString); //got temp
+          ChillStrobe := FALSE;
+	      CoolState := 73;
+	    END_IF;
+  
+	//Query chiller for the heating power.  -100 to 100 (%)
+	  73:
+        ChillWrtString := 'in_pv_01';  //command
+	    ChillStrobe := TRUE;  //start query
+	    CoolState := 74;
+      74:
+        IF do_serial_chiller.Q THEN //wait for ack from do_serial_chiller
+	      HeatingPower := ANY_TO_REAL(do_serial_chiller.RdString);  //got heating power
+	      ChillStrobe := FALSE;
+	      IF HeatingPower > -99.0 THEN
+	        _IO_EM_DO_02 := FALSE;  //Turn LN2 boost solenoid valve off
+	      ELSE
+	        _IO_EM_DO_02 := TRUE;  //Turn LN2 boost solenoid valve on
+	      END_IF;
+	     CoolState := 80;
+	    END_IF;
+  
+	  80:  
+	    IF NOT TP_Main.Q THEN  //wait for interp point timer to expire
+	      TP_MainStrobe := FALSE;
+
+		  IF jj = Npoints  THEN  //have we finished looping through interpolated points
+		    CoolState := 100;  // loop over interpolated points completed
+		  ELSE
+		    CoolState := 60;  // continue looping over interpolated points
+		  END_IF;
+	    END_IF;
+
+	  
+	  100:
+	    IF CoolCurveTimes[ii+1] < 0.0 THEN
+		  // we may want to keep the LN2 on and only turn off when 
+		  // final temp is reached.
+		  MainState := 90;  //Jump out of cooling curve state machine
+		  CoolState := 20;
+        ELSE
+	      CoolState := 40;  // Ramp to next point on cooling curve.  next i
+        END_IF;
+    END_CASE;	    
+	// ********End of Cooling Curve State Machine***********
+
+
+  //BEGINNING OF WAIT FOR FINAL COOLDOWN LOOP
+  //keep checking temp and controlling LN2 until final temp is reached
+
+  //Query chiller for the actual temperature
+  90:	
+    Chillop := SerQuery;
+    ChillWrtString := 'in_pv_00';  //command
+    ChillStrobe := TRUE;  //start query
+    MainState := 92;
+  92:
+    IF do_serial_chiller.Q THEN  //wait for acknowledge from do_serial_chiller
+      CURRENT_TEMP := ANY_TO_REAL(do_serial_chiller.RdString); //got temp
+      ChillStrobe := FALSE;
+      MainState := 93;
+    END_IF;
+  
+  //Query chiller for the heating power.  -100 to 100 (%)
+  93:
+    ChillWrtString := 'in_pv_01';  //command
+    ChillStrobe := TRUE;  //start query
+    MainState := 94;
+  94:
+    IF do_serial_chiller.Q THEN //wait for ack from do_serial_chiller
+      HeatingPower := ANY_TO_REAL(do_serial_chiller.RdString);  //got heating power
+      ChillStrobe := FALSE;
+      IF HeatingPower > -99.0 THEN
+        _IO_EM_DO_02 := FALSE;  //Turn LN2 boost solenoid valve off
+      ELSE
+        _IO_EM_DO_02 := TRUE;  //Turn LN2 boost solenoid valve on
+      END_IF;
+      MainState := 95;
+    END_IF;
+  
+  //check if CURRENT_TEMP  is close enough to SET_TEMP
+  // if not close enough, then keep looping back to MainState 90
+  95:
+    IF (ABS(CURRENT_TEMP - SET_TEMP) < 0.2 ) THEN
+	  MainState := 110;
+	ELSE
+	  MainState := 90;
+	END_IF;
+   // END OF WAIT FOR FINAL TEMP LOOP
+ 
+   // Turn poll mode back on to get asynchronous, continuous temp update
+   110:   
+	Chillop := PollEnable;
+	ChillWrtString := 'in_pv_00';
+	ChillStrobe := TRUE;
+	MainState := 113;	
+  113:
+    IF do_serial_chiller.Q THEN
+	  ChillStrobe := FALSE;
+	  MainState := 115;
+	END_IF;	
+
+  115:	
+ 	_IO_EM_DO_02 := FALSE;	 // make sure LN2 is off
+ 
+	// HMI to beep.  Message:  UNLOAD, cooling curve complete.
+    // PAUSED, Hit CONTINUE to complete
+	CYCLE_STEP := 'UNLOAD';
+    STATUS := 'Cycle Complete, Unload Crystallizer';
+	F1DISP := 2;
+    IF F1 THEN
+      MainState := 120;
+	  STATUS := '';
+	  CYCLE_STEP := '';
+      ChillWrtString := 'out_sp_00 ';
+	  WarmUpTemp := CoolCurve[1]; //WarmUpTemp is seed temperature
+	  SET_TEMP := WarmUpTemp;
+  	  valuestr := String_1decimal( WarmUpTemp);
+	  ChillWrtString := REPLACE(ChillWrtString, valuestr, 11,16);
+	  Chillop := SerWrite;
+	  ChillStrobe := TRUE;
+    END_IF;
+  
+   120:  // Warmup
+     // set set_temp = seed temp and go back to idle for now
+	    IF do_serial_chiller.Q THEN
+		  ChillStrobe := FALSE;
+		  MainState := 20;
+		END_IF;
+	
+END_CASE;
+
+
+LN2_VENT_TEMP :=  ( ANY_TO_REAL(_IO_P3_AI_01)  - 2700.0 ) / 10.0;
+
+
+
+IF _IO_EM_DO_02  THEN
+  LN2_BOOST_STATE := 1;
+ELSE
+  LN2_BOOST_STATE := 0;
+END_IF;
+
+
+// ***************************************************************************
+//  Scale serial port function block
+// ***************************************************************************
+IF INIT THEN  // INIT serial blocks
+  ScaleChan :=6;
+  ScaleStrobe := FALSE;
+  ScaleState := 20;
+  ScaleAppendCR := FALSE;
+END_IF;
+do_serial_scale(ScaleStrobe, ScaleOp, ScaleChan, ScaleWrtString, ScaleAppendCR );
+
+// Scale state machine
+  
+CASE ScaleState OF  
+  20:
+    ScaleOp := PollEnable;
+	ScaleWrtString := 'R';
+	ScaleStrobe := TRUE;
+	ScaleState := 40;
+	
+  40:
+    IF do_serial_scale.Q THEN
+	  ScaleStrobe := FALSE;
+	  ScaleState :=60;
+	END_IF;
+	
+  60:
+    IF do_serial_scale.PollOut THEN
+	  LN2_LEVEL := ANY_TO_REAL( MID(do_serial_scale.RdString, 9, 2 ));
+	END_IF;
+END_CASE;
+
+
+
+
+
+
+
+
+// ***************************************************************************
+//  Test Stuff - decomment to use
+// ***************************************************************************
+/*
+IF INIT THEN
+  statet := 10;
+END_IF;
+CASE statet OF
+10: 
+  ChillWrtString := 'in_pv_00';
+  ChillStrobe := TRUE;
+  statet := 20;
+20:
+  IF do_serial_chiller.Q THEN
+    ChillStrobe := FALSE;
+	STATUS := do_serial_chiller.RdString;
+	statet := 10;
+  END_IF;
+END_CASE;
+*/
+
+END_PROGRAM

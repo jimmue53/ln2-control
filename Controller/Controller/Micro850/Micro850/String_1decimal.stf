@@ -1,0 +1,11 @@
+FUNCTION String_1decimal
+// strout := String_1decimal(real_num)
+
+itmp := ANY_TO_INT(NumValue);
+strtmp := ANY_TO_STRING(itmp);
+rtmp := 10.0*(NumValue-ANY_TO_REAL(itmp));
+itmp := ANY_TO_INT(rtmp);
+strtmp2 := REPLACE(strtmp, '.', 1, 20);
+String_1decimal := REPLACE(strtmp2, ANY_TO_STRING(itmp),1,20);
+
+END_FUNCTION

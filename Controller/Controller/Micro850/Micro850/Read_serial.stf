@@ -1,0 +1,61 @@
+FUNCTION_BLOCK read_serial
+// read_serial( Strobe, Chan )
+IF INIT THEN
+  State :=20;
+  Clear := FALSE;
+  Read := FALSE;
+ END_IF;
+
+	BuffPars.Channel := Chan;
+    ReadPars.Channel := Chan;
+    ReadPars.Length := 80;
+    BuffClrPars.Channel := Chan;
+    StrobeCopy := Strobe;
+    
+    ABL_1(StrobeCopy , BuffPars );
+	blen :=ABL_1.Characters;
+	qq := ABL_1.Q;   
+	ARL_1(Read, ReadPars );
+	ACL_1(Clear , BuffClrPars );
+
+CASE State OF
+  20:  // Wait for next Read request, then move to next state
+    IF Strobe THEN 
+	  State := 25;
+	END_IF;
+	
+  25:  // Wait for a line in the buffer
+ 	IF qq AND ( blen > 0 ) THEN
+	  Read := TRUE;
+	  State :=30;
+	END_IF;
+    StrobeCopy := FALSE;
+	ABL_1(StrobeCopy , BuffPars );
+	
+  30:  // Wait for ARL to finish, then pack input into instr string   
+	IF ARL_1.Q THEN
+	  RdString := '';
+      length :=  ANY_TO_DINT(ABL_1.Characters);
+	  FOR ii := 1 TO length DO
+        tmpstring := CHAR(ANY_TO_DINT(ARL_1.Destination[ii]));
+        RdString := INSERT(RdString, tmpstring, ii+1);
+      END_FOR;
+	  Read := FALSE;
+	  Clear := TRUE;
+	  State := 40;
+	END_IF;
+
+  40: //Wait for clear to finish, then assert Q and deassert Clear
+	IF ACL_1.Q THEN
+	  Clear := FALSE;
+	  Q := TRUE;
+	  State := 50;
+	END_IF;
+		  
+  50:  // Wait for Strobe FALSE, then deassert Ack and move to Wait for next read state
+    IF NOT Strobe THEN
+	  Q := FALSE;
+	  State := 20;
+	END_IF;
+END_CASE;
+END_FUNCTION_BLOCK

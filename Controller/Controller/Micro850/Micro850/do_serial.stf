@@ -1,0 +1,202 @@
+FUNCTION_BLOCK do_serial
+//  do_serial
+//  inputs: SerStrobe, op, chan, WrtString, AppendCR
+//  outputs:  Q, RdString, error, PollOut
+//
+//  op = 1 Read
+//  op = 2 Write
+//  op = 3 Query
+//  op = 4 Turn polling on - WrtString inputs contain poll command
+//         Output string of poll is contained in RdString when PollOut := TRUE.  NEed to catch it,
+//         because it is only there for one scan cycle
+//  op = 5 Turn polling off
+//
+//****************************************************************
+
+IF INIT THEN
+  SerialState := 20;
+  LastState := 0;
+  TrackIndx := 1;
+  Tracker[1] := 20;
+  PollOn := FALSE;
+  IsPoll := FALSE;
+  IsQuery := FALSE;
+  tries := 0;
+  error := FALSE;
+END_IF;
+
+IF (SerialState <> LastState) AND (TrackIndx < 99) THEN
+  TrackIndx := TrackIndx + 1;
+  Tracker[TrackIndx] := SerialState;
+  LastState := SerialState;
+END_IF;
+
+
+// Serial write and read blocks with init
+IF INIT THEN  
+  WStrobe := FALSE;
+  RStrobe := FALSE;
+
+END_IF;
+write_serial_1(WStrobe, chan, WrtStringLocal, AppendCR);
+read_serial_1(RStrobe, chan);
+
+// Timer blocks with init
+IF INIT THEN  
+  TON_WriteStrobe := FALSE;
+  TON_WriteDelay := T#250ms;
+END_IF;
+TON_Write(TON_WriteStrobe, TON_WriteDelay);
+
+IF INIT THEN  // continuous  polling mode period
+  TON_PollUpdateStrobe := FALSE;
+  TON_PollUpdateDelay := T#250ms;
+END_IF;
+TON_PollUpdate( TON_PollUpdateStrobe, TON_PollUpdateDelay);
+
+
+IF INIT THEN  // read timeout timer
+  TON_RdTimeoutStrobe := FALSE;
+  TON_RdTimeoutDelay := T#5s;
+END_IF;
+TON_RdTimeout( TON_RdTimeoutStrobe, TON_RdTimeoutDelay);
+
+
+CASE SerialState OF
+  
+  20:
+    IF SerStrobe  THEN
+	  WrtStringLocal := WrtString;
+	  IF PollOn THEN  //reset if Poll was active 
+		RStrobe := FALSE;
+	    WStrobe := FALSE;
+		TON_WriteStrobe := FALSE;
+		IsPoll := FALSE;
+	  END_IF;
+
+	  IF op = 1 THEN
+	    RStrobe := TRUE;
+	    SerialState := 40; // Read
+	  ELSIF op = 2 THEN
+	    WStrobe := TRUE;
+		SerialState := 60;  // Write
+	  ELSIF op = 3 THEN
+	    IsQuery := TRUE;  // This is how the Write and Read states tell we're doing a Query
+		WStrobe := TRUE;
+		tries :=0;
+		SerialState := 60;  // Query - go to write state with op=3
+      ELSIF op = 4 THEN
+	    PollString := WrtString;
+		PollOn := TRUE;
+		SerialState := 120;
+      ELSIF op = 5 THEN
+	    PollOn := FALSE;
+		IsPoll := FALSE;
+		SerialState := 120;
+	  ELSE 
+	    error := TRUE;
+		SerialState := 120;
+      END_IF;
+    ELSIF PollOn THEN
+	    tries := 0;
+		SerialState := 80;
+	END_IF;
+	
+//****************************************************************
+//        Read State
+//****************************************************************
+  40: 
+	IF read_serial_1.Q THEN
+	  RStrobe := FALSE;
+	  TON_RdTimeoutStrobe := FALSE;
+      RdString := read_serial_1.RdString;
+      IF IsPoll THEN
+		SerialState := 90; //finish up  continuous Poll cycle
+	  ELSE
+	    IsQuery := FALSE; 
+		tries := 0;
+		SerialState := 120;//otherwise end read operation
+	  END_IF;
+	ELSIF TON_RdTimeout.Q AND IsQuery AND (tries < 3) THEN
+	  // Start query over
+	  RStrobe := FALSE;
+	  TON_RdTimeoutStrobe := FALSE;
+	  tries := tries + 1;
+	  WStrobe := TRUE;
+	  SerialState := 60;
+    ELSIF tries > 2 THEN
+	  // return error
+	  RStrobe := FALSE;
+	  TON_RdTimeoutStrobe := FALSE;	  
+	  error := TRUE;
+	  tries := 0;
+	  SerialState := 120;
+	END_IF;
+
+//****************************************************************
+//     Write States
+//****************************************************************
+  60: // Write
+	IF write_serial_1.Q THEN
+	  WStrobe := FALSE;
+	  TON_WriteStrobe := TRUE;  //start 250 msec timer 
+      SerialState := 65;
+	END_IF;
+	
+  65:  //Write wait - Wait for delay timer to finish
+	IF TON_Write.Q  THEN
+	  TON_WriteStrobe := FALSE; 
+	  IF IsQuery  THEN // if query follow this write with a read
+	    RStrobe := TRUE;
+		TON_RdTimeoutStrobe := TRUE;  //Start Read timeout timer
+		SerialState := 40;
+	  ELSE
+		SerialState := 120; // complete write operation
+	  END_IF;
+	END_IF;
+
+ //***************************************************************
+ //    Continous polling states:
+ //***************************************************************
+  
+  
+  80:  // continuous Polling mode	  
+    TON_PollUpdateStrobe := TRUE;
+	IsPoll := TRUE;
+	IsQuery := TRUE;
+	SerialState := 85;
+  
+  85: // polling delay  - time between temperature readouts
+    IF  TON_PollUpdate.Q  THEN
+      TON_PollUpdateStrobe := FALSE;
+	  WrtStringLocal := PollString;
+	  WStrobe := TRUE;
+	  SerialState := 60;  //do the write next
+	END_IF;
+	  
+  90: // send out Poll output
+     PollOut := TRUE;
+	 SerialState := 95;
+	
+  95:
+	PollOut := FALSE;
+	SerialState := 20; //back to beginning of poll cycle
+ 
+   
+  //**************************************************************
+  //        States to Complete Read, Write, or Query command
+  //**************************************************************
+  120:  // op done, raise Q
+    Q := TRUE;
+    SerialState := 140;
+  
+  140: // When strobe goes low, drop Q and go back to wait for strobe or Poll
+    IF NOT SerStrobe THEN
+      Q := FALSE;
+	  error := FALSE;
+	  SerialState := 20;
+	END_IF;
+	
+END_CASE;
+
+END_FUNCTION_BLOCK

@@ -1,0 +1,53 @@
+FUNCTION_BLOCK write_serial
+// write_serial(Strobe, Chan, WrtString, AppendCR)
+IF INIT THEN
+  State :=20;
+END_IF;
+
+
+CASE State OF
+  20:  // Waiting for next Write
+    IF Strobe THEN
+	  strlen := ANY_TO_DINT(MLEN(WrtString));
+
+      FOR ii := 1 TO strlen DO
+        outascii[ii] := ANY_TO_BYTE( ASCII(WrtString, ii));
+      END_FOR;
+      IF AppendCR THEN
+        outascii[strlen+1]:=13;
+		Adder := 1;
+	  ELSE
+	    Adder := 0;
+	  END_IF;      
+	  IF ((strlen + 1 + Adder) < 82)  THEN   
+        FOR ii := (strlen + 1 + Adder ) TO 82 DO 
+          outascii[ii] := 0;
+        END_FOR;
+      END_IF;
+      WritePars.Channel := Chan;
+      WritePars.length := ANY_TO_UINT(strlen +Adder );  
+	  State := 30;
+	END_IF;
+  
+  30:  // Do write and wait for finish
+    AWT_1(Strobe, WritePars, outascii);
+    Q := AWT_1.Q;
+	IF AWT_1.Q THEN
+	  NumCharsOutput := AWT_1.NumChar;
+      ErrorFlag := AWT_1.Error;
+      ErrorID := AWT_1.ErrorID;	  
+	  State := 40;
+	END_IF;
+	  
+  40:  // Wait for Strobe FALSE
+    IF NOT Strobe THEN
+	  Q := FALSE;
+	  AWT_1(Strobe, WritePars, outascii);
+	  State := 20;
+	END_IF;
+END_CASE;
+
+
+
+
+END_FUNCTION_BLOCK
