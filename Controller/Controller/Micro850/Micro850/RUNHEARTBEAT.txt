@@ -1,0 +1,59 @@
+(****** QuickLD compiler *******************************)
+(****** Copyright Rockwell Automation Canada, Ltd ******)
+(****** ST *********************************************)
+
+(*************** Rung **********************************)
+(**)
+__STEPPRAGMA
+0,1
+__ENDSTEPPRAGMA
+(*Label :*)(**)
+(* Operator output on : NOT with __EDTB1 *)
+__EDTB1 := (NOT(CLOCK)) ;
+__MO_NOT_1 := __EDTB1 ;
+CLOCK := __EDTB1 ;
+
+(*************** Code for the end of Rung **************)
+
+
+(*************** Rung **********************************)
+(**)
+__STEPPRAGMA
+0,3
+__ENDSTEPPRAGMA
+(*Label :*)(**)
+(* FB call: TP *)
+TP_2(CLOCK, T#2000MS) ;
+
+(*************** Code for the end of Rung **************)
+
+
+(*************** Rung **********************************)
+(**)
+__STEPPRAGMA
+0,6
+__ENDSTEPPRAGMA
+(*Label :*)(**)
+__EDTB3 := TRUE ;
+IF __EDTB3 THEN
+(* Operator output on : <= with __EDTB2 *)
+__EDTB2 := (TP_2.ET <= T#500MS) ;
+ELSE
+__EDTB2 := FALSE ;
+END_IF ;
+__MO_LESSEQUAL_1 := __EDTB2 ;
+HEARTBEAT := __EDTB2 ;
+
+(*************** Code for the end of Rung **************)
+
+
+(*************** Code for the end of File **************)
+__GL __LG0000 ;
+
+
+
+(*************** Local Symbols table *******************)
+(* __EDTB1 *)
+(* __EDTB2 *)
+(* __EDTB3 *)
+

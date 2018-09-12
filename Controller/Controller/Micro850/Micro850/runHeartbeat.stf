@@ -1,0 +1,27 @@
+PROGRAM runHeartbeat
+#info= QLD
+BOF
+
+
+(**)
+
+SOR  [0,1] (**) (**)  XIC  [1,0] (*clock*) (**)  FB  [2,0] (*NOT*) (*2*) ( (*i1:*)(**) (**) ; (*o1:*)(**) (**) )  OTE  [5,0] (*clock*) (**)
+EOR [6,0]
+
+
+(**)
+
+SOR  [0,3] (**) (**)  XIC  [1,0] (*clock*) (**)  FB  [2,0] (*TP*) (*TP_2*) ( (*IN:IN*)(**) (**)  , (*PT:PT*)(*T#2000ms*) (**) ; (*Q:Q*)(**) (**)  , (*ET:ET*)(**) (**) )
+EOR [5,0]
+
+
+(**)
+
+SOR  [0,6] (**) (**)  FB  [1,0] (*<=*) (*2*) ( (*EN:EN*)(**) (**)  , (*i1:*)(*TP_2.ET*) (**)  , (*i2:*)(*T#500ms*) (**) ; (*o1:*)(**) (**) )  OTE  [4,0] (*Heartbeat*) (**)
+EOR [5,0]
+EOF
+#end_info
+#info= ID_MAX
+NextId=2
+#end_info
+END_PROGRAM
