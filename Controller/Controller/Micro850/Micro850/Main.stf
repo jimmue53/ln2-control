@@ -213,8 +213,11 @@ CASE MainState OF
 	  
 	  40:  //  Initialize interpolated points loop
 	    ii := ii + 1;  //increment CoolCurve array index
-	    Npoints := ANY_TO_DINT(CoolCurveTimes[ii]/COOL_DOWN_DTIME);
-	    delta_temp := ( CoolCurve[ii] - CoolCurve[ii-1] ) / ANY_TO_REAL(Npoints); //delta temp between interp pts
+	    Npoints := ANY_TO_DINT((CoolCurveTimes[ii]*ANY_TO_REAL(60))/COOL_DOWN_DTIME);	//changing from seconds to minutes CK
+		IF Npoints=0 THEN		//remove divide by 0 error CK
+			Npoints:=1;
+		END_IF;
+		delta_temp := ( CoolCurve[ii] - CoolCurve[ii-1] ) / ANY_TO_REAL(Npoints+1); //delta temp between interp pts
 	    jj := 0; // index for interpolated points
 	    NEXT_TEMP := CoolCurve[ii-1];
 	    CoolState := 60;
