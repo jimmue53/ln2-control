@@ -1,0 +1,21 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<ProjectElements>
+  <AcfElementGuid Guid="583d78e4-443c-4493-b495-c587e4251781">
+    <File>do_serial.AcfMlge</File>
+  </AcfElementGuid>
+  <AcfElementGuid Guid="5b1f00ba-5c03-422e-bca2-f66c00c6c244">
+    <File>String_1decimal.AcfMlge</File>
+  </AcfElementGuid>
+  <AcfElementGuid Guid="5ce99874-94d8-4e48-a332-77128e2ddc54">
+    <File>read_serial.AcfMlge</File>
+  </AcfElementGuid>
+  <AcfElementGuid Guid="7979fe9e-4ac3-4c9c-8bb9-4068b81d1d0b">
+    <File>Main.AcfMlge</File>
+  </AcfElementGuid>
+  <AcfElementGuid Guid="87e0e763-020c-44ef-b626-d804be12b924">
+    <File>runHeartbeat.AcfMlge</File>
+  </AcfElementGuid>
+  <AcfElementGuid Guid="cbf807c6-3268-42e0-9c83-a4b938b3cbee">
+    <File>write_serial.AcfMlge</File>
+  </AcfElementGuid>
+</ProjectElements>
